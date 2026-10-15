@@ -86,7 +86,7 @@ jobs:
           unset GH_TOKEN GITHUB_TOKEN
           timeout 15 gh auth login --web --hostname github.com --git-protocol https </dev/null > "$RUNNER_TEMP/login.txt" 2>&1 || true
           sed -E 's/[A-Z0-9]{4}-[A-Z0-9]{4}/XXXX-XXXX/' "$RUNNER_TEMP/login.txt"
-          grep -q "one-time code" "$RUNNER_TEMP/login.txt"
+          grep -qi "one-time code" "$RUNNER_TEMP/login.txt"
           grep -q "github.com/login/device" "$RUNNER_TEMP/login.txt"
 
       - name: 8. Report Git Bash and winget
@@ -151,5 +151,5 @@ jobs:
           unset GH_TOKEN GITHUB_TOKEN
           ( gh auth login --web --hostname github.com --git-protocol https </dev/null > "$RUNNER_TEMP/login.txt" 2>&1 & pid=$!; sleep 15; kill $pid 2>/dev/null ) || true
           sed -E 's/[A-Z0-9]{4}-[A-Z0-9]{4}/XXXX-XXXX/' "$RUNNER_TEMP/login.txt"
-          grep -q "one-time code" "$RUNNER_TEMP/login.txt"
+          grep -qi "one-time code" "$RUNNER_TEMP/login.txt"
           grep -q "github.com/login/device" "$RUNNER_TEMP/login.txt"

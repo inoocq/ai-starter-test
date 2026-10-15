@@ -1,0 +1,155 @@
+name: setup
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 1. Fresh HTTPS clone into an empty folder
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/ws" && cd "$RUNNER_TEMP/ws"
+          git clone "https://github.com/${GITHUB_REPOSITORY}.git" .
+          test -f CLAUDE.md && test -f .claude/settings.json && test -d plugins/starter/skills
+          git check-ignore -q private/example.pdf
+          echo "remote: $(git remote get-url origin)"
+
+      - name: 2. Requirements check before Claude is installed (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          Write-Host "PowerShell $($PSVersionTable.PSVersion)"
+          $out = powershell -ExecutionPolicy Bypass -File scripts\check_requirements.ps1 -Check *>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($out -notmatch '\[OK\]\s+git version') { throw 'git was not found' }
+          if ($out -notmatch '\[OK\]\s+gh version') { throw 'gh was not found' }
+          if ($out -notmatch 'private\\ folder is excluded') { throw 'private\ is not reported as ignored' }
+          if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+            if ($out -notmatch '\[MISSING\] Claude') { throw 'Claude should be reported missing' }
+            if ($code -ne 1) { throw "exit code $code, expected 1 while Claude is missing" }
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: 3. Install Claude Code with the documented one-liner (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          irm https://claude.ai/install.ps1 | iex
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.local\bin"
+
+      - name: 4. Requirements check after the install, signed in to GitHub
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          claude --version
+          $out = powershell -ExecutionPolicy Bypass -File scripts\check_requirements.ps1 -Check *>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($out -notmatch 'All set') { throw 'expected "All set"' }
+          if ($code -ne 0) { throw "exit code $code, expected 0" }
+
+      - name: 5. Plugin validates, installs from this folder, and is enabled
+        shell: bash
+        run: |
+          claude plugin validate .
+          claude plugin marketplace add ./
+          claude plugin install starter@ai-starter-test
+          claude plugin list | tee "$RUNNER_TEMP/plugins.txt"
+          grep -q "starter@ai-starter-test" "$RUNNER_TEMP/plugins.txt"
+
+      - name: 6. A trusted folder's settings register its marketplace when a session starts
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:RUNNER_TEMP 'cfg-trusted'
+          New-Item -ItemType Directory $cfg | Out-Null
+          $p = (Get-Location).Path
+          $projects = @{}
+          foreach ($k in @($p, $p.Replace('\', '/'))) { $projects[$k] = @{ hasTrustDialogAccepted = $true } }
+          @{ projects = $projects } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM (Join-Path $cfg '.claude.json')
+          $env:CLAUDE_CONFIG_DIR = $cfg
+          '' | claude -p "Reply OK" 2>&1 | Out-Host   # not signed in: fails, but the session start registers the marketplace
+          $list = claude plugin marketplace list 2>&1 | Out-String
+          Write-Host $list
+          if ($list -notmatch 'ai-starter-test') { throw 'the project marketplace was not registered' }
+          $global:LASTEXITCODE = 0
+
+      - name: 7. GitHub sign-in with no keyboard prints a one-time code and a link
+        shell: bash
+        run: |
+          export GH_CONFIG_DIR="$(mktemp -d)"
+          unset GH_TOKEN GITHUB_TOKEN
+          timeout 15 gh auth login --web --hostname github.com --git-protocol https </dev/null > "$RUNNER_TEMP/login.txt" 2>&1 || true
+          sed -E 's/[A-Z0-9]{4}-[A-Z0-9]{4}/XXXX-XXXX/' "$RUNNER_TEMP/login.txt"
+          grep -q "one-time code" "$RUNNER_TEMP/login.txt"
+          grep -q "github.com/login/device" "$RUNNER_TEMP/login.txt"
+
+      - name: 8. Report Git Bash and winget
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($c in 'bash', 'winget') {
+            $cmd = Get-Command $c -ErrorAction SilentlyContinue
+            Write-Host ("{0}: {1}" -f $c, ($(if ($cmd) { $cmd.Source } else { 'not found' })))
+          }
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 1. Fresh HTTPS clone into an empty folder
+        run: |
+          mkdir "$RUNNER_TEMP/ws" && cd "$RUNNER_TEMP/ws"
+          git clone "https://github.com/${GITHUB_REPOSITORY}.git" .
+          test -f CLAUDE.md && git check-ignore -q private/example.pdf
+
+      - name: 2. Requirements check before Claude is installed
+        run: |
+          set +e
+          out="$(bash scripts/check_requirements.sh --check 2>&1)"; code=$?
+          set -e
+          echo "$out"
+          echo "$out" | grep -q '\[OK\]      git version'
+          echo "$out" | grep -q '\[OK\]      gh version'
+          echo "$out" | grep -q 'private/ folder is excluded'
+          if ! command -v claude >/dev/null; then
+            echo "$out" | grep -q '\[MISSING\] Claude'
+            test "$code" -eq 1
+          fi
+
+      - name: 3. Install Claude Code with the documented one-liner
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 4. Requirements check after the install, signed in to GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          claude --version
+          out="$(bash scripts/check_requirements.sh --check 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'All set'
+
+      - name: 5. Plugin validates, installs from this folder, and is enabled
+        run: |
+          claude plugin validate .
+          claude plugin marketplace add ./
+          claude plugin install starter@ai-starter-test
+          claude plugin list | tee "$RUNNER_TEMP/plugins.txt"
+          grep -q "starter@ai-starter-test" "$RUNNER_TEMP/plugins.txt"
+
+      - name: 7. GitHub sign-in with no keyboard prints a one-time code and a link
+        run: |
+          export GH_CONFIG_DIR="$(mktemp -d)"
+          unset GH_TOKEN GITHUB_TOKEN
+          ( gh auth login --web --hostname github.com --git-protocol https </dev/null > "$RUNNER_TEMP/login.txt" 2>&1 & pid=$!; sleep 15; kill $pid 2>/dev/null ) || true
+          sed -E 's/[A-Z0-9]{4}-[A-Z0-9]{4}/XXXX-XXXX/' "$RUNNER_TEMP/login.txt"
+          grep -q "one-time code" "$RUNNER_TEMP/login.txt"
+          grep -q "github.com/login/device" "$RUNNER_TEMP/login.txt"

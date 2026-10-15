@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "ai-starter-test": {
+      "source": { "source": "directory", "path": "./" }
+    }
+  },
+  "enabledPlugins": {
+    "starter@ai-starter-test": true
+  }
+}

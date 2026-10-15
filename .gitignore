@@ -1,0 +1,12 @@
+# Confidential working material: never committed (see CLAUDE.md, rule 1)
+private/*
+!private/README.md
+
+# Per-machine Claude settings and session notes
+.claude/settings.local.json
+.claude/handoffs/
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
